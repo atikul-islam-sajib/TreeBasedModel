@@ -163,9 +163,8 @@ class RandomForest:
         # Draw bootstrap samples
         X_inbag, y_inbag, idxs_inbag = self._bootstrap_samples(X, y, self.bootstrap, self.random_state_)
     
-        # Fit tree
-        # tree.fit(X_inbag, y_inbag)
-        return tree, X_inbag, y_inbag, idxs_inbag
+        tree.fit(X_inbag, y_inbag)
+        return tree, idxs_inbag
 
     def fit(self, X, y):
         """Build a Random Forest  from the training set (X, y).
@@ -206,11 +205,11 @@ class RandomForest:
         #Create random seeds for each tree in the forest
         MAX_INT = np.iinfo(np.int32).max
         seed_list = self.random_state_.randint(MAX_INT, size=self.n_trees)
-        self.trees = Parallel(n_jobs=-1)(delayed(self._build_tree)(X, y, seed)
-                                     for seed in seed_list)
+        # self.trees = Parallel(n_jobs=-1)(delayed(self._build_tree)(X, y, seed)
+        #                              for seed in seed_list)
 
         #Create forest
-        for i, seed in zip(range(self.n_trees), seed_list):
+        # for i, seed in zip(range(self.n_trees), seed_list):
             #for _ in range(self.n_trees):
 
             # #Instantiate tree
@@ -232,13 +231,20 @@ class RandomForest:
             #     X, y, self.bootstrap, self.random_state_) #self._check_random_state(seed))
             
             # Use joblib to parallelize tree fitting
-            tree, X_inbag, y_inbag, idxs_inbag = Parallel(n_jobs=-1)(delayed(self._build_tree)(X, y, seed)
-                                             for seed in seed_list)
+            # tree, X_inbag, y_inbag, idxs_inbag = Parallel(n_jobs=-1)(delayed(self._build_tree)(X, y, seed)
+            #                                  for seed in seed_list)
 
-            # Fit tree using inbag samples
-            tree.fit(X_inbag, y_inbag)
-            self.trees.append(tree) #Add tree to forest
-            feature_importance_trees[i, :] = tree.feature_importances_ #add feature importance to array
+            # # Fit tree using inbag samples
+            # tree.fit(X_inbag, y_inbag)
+            # self.trees.append(tree) #Add tree to forest
+            # feature_importance_trees[i, :] = tree.feature_importances_ #add feature importance to array
+        
+            results = Parallel(n_jobs=-1)(delayed(self._build_tree)(X, y, seed) for seed in seed_list)
+            tree, idxs_inbag_list = zip(*results)
+    
+            # Post-process results: calculate feature importances, handle SHAP values, etc.
+            feature_importance_trees = np.array([_tree.feature_importances_ for _tree in tree])
+            self.feature_importances_ = np.mean(feature_importance_trees, axis=0)
 
             # Draw oob samples (which have not been used for training) and predict oob observations
             if self.oob:
