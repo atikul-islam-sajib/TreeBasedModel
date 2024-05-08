@@ -1,3 +1,4 @@
+from joblib import Parallel, delayed
 from TreeModelsFromScratch.DecisionTree import DecisionTree
 import numpy as np
 import pandas as pd
@@ -142,6 +143,30 @@ class RandomForest:
         if isinstance(seed, np.random.RandomState):
             return seed
 
+    def _build_tree(self, X, y, seed):
+        """Builds a single tree with the given seed and training data."""
+        tree = DecisionTree(
+            max_depth=self.max_depth,
+            min_samples_split=self.min_samples_split,
+            min_samples_leaf=self.min_samples_leaf,
+            n_features=self.n_features,
+            criterion=self.criterion,
+            treetype=self.treetype,
+            feature_names=self.feature_names,
+            HShrinkage=self.HShrinkage,
+            HS_lambda=self.HS_lambda,
+            k=self.k,
+            random_state=seed,
+            depth_dof=self.depth_dof  # your additional configurations
+        )
+
+        # Draw bootstrap samples
+        X_inbag, y_inbag, idxs_inbag = self._bootstrap_samples(X, y, self.bootstrap, self.random_state_)
+    
+        # Fit tree
+        tree.fit(X_inbag, y_inbag)
+        return tree
+
     def fit(self, X, y):
         """Build a Random Forest  from the training set (X, y).
         Parameters
@@ -181,28 +206,34 @@ class RandomForest:
         #Create random seeds for each tree in the forest
         MAX_INT = np.iinfo(np.int32).max
         seed_list = self.random_state_.randint(MAX_INT, size=self.n_trees)
+        self.trees = Parallel(n_jobs=-1)(delayed(self._build_tree)(X, y, seed)
+                                     for seed in seed_list)
 
         #Create forest
         for i, seed in zip(range(self.n_trees), seed_list):
             #for _ in range(self.n_trees):
 
-            #Instantiate tree
-            tree = DecisionTree(max_depth=self.max_depth,
-                                min_samples_split=self.min_samples_split,
-                                min_samples_leaf=self.min_samples_leaf,
-                                n_features=self.n_features,
-                                criterion=self.criterion,
-                                treetype=self.treetype,
-                                feature_names=self.feature_names,
-                                HShrinkage=self.HShrinkage,
-                                HS_lambda=self.HS_lambda,
-                                k=self.k,
-                                random_state=seed,
-                                depth_dof=self.depth_dof) # Add new depth_dof
+            # #Instantiate tree
+            # tree = DecisionTree(max_depth=self.max_depth,
+            #                     min_samples_split=self.min_samples_split,
+            #                     min_samples_leaf=self.min_samples_leaf,
+            #                     n_features=self.n_features,
+            #                     criterion=self.criterion,
+            #                     treetype=self.treetype,
+            #                     feature_names=self.feature_names,
+            #                     HShrinkage=self.HShrinkage,
+            #                     HS_lambda=self.HS_lambda,
+            #                     k=self.k,
+            #                     random_state=seed,
+            #                     depth_dof=self.depth_dof) # Add new depth_dof
 
-            #Draw bootstrap samples (inbag)
-            X_inbag, y_inbag, idxs_inbag = self._bootstrap_samples(
-                X, y, self.bootstrap, self.random_state_) #self._check_random_state(seed))
+            # #Draw bootstrap samples (inbag)
+            # X_inbag, y_inbag, idxs_inbag = self._bootstrap_samples(
+            #     X, y, self.bootstrap, self.random_state_) #self._check_random_state(seed))
+            
+            # Use joblib to parallelize tree fitting
+            tree = Parallel(n_jobs=-1)(delayed(self._build_tree)(X, y, seed)
+                                             for seed in seed_list)
 
             # Fit tree using inbag samples
             tree.fit(X_inbag, y_inbag)
