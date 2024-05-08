@@ -194,24 +194,52 @@ class RandomForest:
         for i, (tree, idxs_inbag) in enumerate(zip(self.trees, idxs_inbag_list)):
             feature_importance_trees[i, :] = tree.feature_importances_
     
+            # Draw oob samples (which have not been used for training) and predict oob observations
             if self.oob:
+                n_samples = X.shape[0]
+                tree.oob_preds = np.full(n_samples, np.nan)#np.zeros(n_samples, dtype=np.float64)
+                #n_oob_pred = np.zeros(n_samples, dtype=np.int64)
+
                 X_oob, y_oob, idxs_oob = self._oob_samples(X, y, idxs_inbag)
-                oob_predictions = tree.predict(X_oob)
+
+                tree.oob_preds[idxs_oob] = tree.predict(X_oob)
+
+                for j in idxs_oob:
+                    self.oob_preds_tree_id[j].append(i)
+
+                # Apply nodewise HS
+                if self.HS_nodewise_shrink_type != None:
+                    self.apply_nodewise_HS(tree, X_inbag, y_inbag, X_oob, y_oob, shrinkage_type=self.HS_nodewise_shrink_type, HS_lambda=self.HS_lambda, cohen_reg_param=self.cohen_reg_param, alpha=self.alpha, cohen_statistic=self.cohen_statistic, testHS=self.testHS)
     
-                for idx, pred in zip(idxs_oob, oob_predictions):
-                    self.oob_preds_tree_id[idx].append(pred)
-    
-                if self.HS_nodewise_shrink_type is not None:
-                    self.apply_nodewise_HS(tree, X[idxs_inbag], y[idxs_inbag], X_oob, y_oob,
-                                           shrinkage_type=self.HS_nodewise_shrink_type, HS_lambda=self.HS_lambda,
-                                           cohen_reg_param=self.cohen_reg_param, alpha=self.alpha,
-                                           cohen_statistic=self.cohen_statistic, testHS=self.testHS)
-    
-            if self.oob_SHAP:
-                tree_inbag_shap = TreeExplainer(tree).shap_values(X[idxs_inbag])
-                tree_oob_shap = TreeExplainer(tree).shap_values(X_oob)
-                shap_scores_inbag[:, :, i] = np.array([np.nanmean(tree_inbag_shap, axis=0) if len(tree_inbag_shap) else np.nan] * len(X))
-                shap_scores_oob[:, :, i] = np.array([np.nanmean(tree_oob_shap, axis=0) if len(tree_oob_shap) else np.nan] * len(X))
+                # Compute inbag and oob SHAP values
+                if self.oob_SHAP:
+
+                    #Create array with nan for single tree shap values which can be pasted in shap_scores_oob array
+                    shap_scores_inbag_tree = np.full([X.shape[0], X.shape[1]], np.nan)
+                    shap_scores_oob_tree = np.full([X.shape[0], X.shape[1]], np.nan)
+
+                    #Create shap explainer for individual tree
+                    export_tree = tree.export_tree_for_SHAP()
+                    explainer_tree = TreeExplainer(export_tree)
+                    verify_shap_model(tree, explainer_tree, X_inbag)
+
+                    #Calculate shap scores for oob
+                    shap_tree_inbag = explainer_tree.shap_values(X_inbag)
+                    shap_tree_oob = explainer_tree.shap_values(X_oob)
+
+                    #Put shap oob scores in correct position of array (correct idx of observation)
+                    np.put_along_axis(shap_scores_inbag_tree,
+                                      idxs_inbag.reshape(idxs_inbag.shape[0], 1),
+                                      shap_tree_inbag,
+                                      axis=0)
+                    np.put_along_axis(shap_scores_oob_tree,
+                                      idxs_oob.reshape(idxs_oob.shape[0], 1),
+                                      shap_tree_oob,
+                                      axis=0)
+
+                    # Update values of overall shap_scores_oob array
+                    shap_scores_inbag[:, :, i] = shap_scores_inbag_tree.copy()
+                    shap_scores_oob[:, :, i] = shap_scores_oob_tree.copy()
     
         # Calculate average feature importances from all trees
         self.feature_importances_ = np.mean(feature_importance_trees, axis=0)
