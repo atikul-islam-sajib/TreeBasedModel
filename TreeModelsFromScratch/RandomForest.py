@@ -243,14 +243,6 @@ class RandomForest:
     
         # Calculate average feature importances from all trees
         self.feature_importances_ = np.mean(feature_importance_trees, axis=0)
-    
-        # Calculate and set final OOB predictions and SHAP values
-        if self.oob:
-            self.finalize_oob_predictions(X, y)
-        if self.oob_SHAP:
-            self.inbag_SHAP_values = np.nanmean(shap_scores_inbag, axis=2)
-            self.oob_SHAP_values = np.nanmean(shap_scores_oob, axis=2)
-    
         # Calculate oob_score for all trees within forest
         if self.oob:
 
