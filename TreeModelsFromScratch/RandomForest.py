@@ -164,7 +164,7 @@ class RandomForest:
         X_inbag, y_inbag, idxs_inbag = self._bootstrap_samples(X, y, self.bootstrap, self.random_state_)
     
         tree.fit(X_inbag, y_inbag)
-        return tree, idxs_inbag
+        return tree, idxs_inbag, X_inbag, y_inbag
 
     def fit(self, X, y):
         if isinstance(X, pd.DataFrame):
@@ -187,11 +187,11 @@ class RandomForest:
         )
         
         # Unpack results and store trees and their inbag indices
-        self.trees, idxs_inbag_list = zip(*results)
+        self.trees, idxs_inbag_list, X_inbag_list, y_inbag_list = zip(*results)
     
         # Process each tree for OOB predictions and feature importances
         feature_importance_trees = np.zeros((self.n_trees, X.shape[1]))
-        for i, (tree, idxs_inbag) in enumerate(zip(self.trees, idxs_inbag_list)):
+        for i, (tree, idxs_inbag, X_inbag, y_inbag) in enumerate(zip(self.trees, idxs_inbag_list, X_inbag_list, y_inbag_list)):
             feature_importance_trees[i, :] = tree.feature_importances_
     
             # Draw oob samples (which have not been used for training) and predict oob observations
