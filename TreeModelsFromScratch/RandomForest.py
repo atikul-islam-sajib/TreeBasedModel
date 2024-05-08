@@ -164,8 +164,8 @@ class RandomForest:
         X_inbag, y_inbag, idxs_inbag = self._bootstrap_samples(X, y, self.bootstrap, self.random_state_)
     
         # Fit tree
-        tree.fit(X_inbag, y_inbag)
-        return tree
+        # tree.fit(X_inbag, y_inbag)
+        return tree, X_inbag, y_inbag, idxs_inbag
 
     def fit(self, X, y):
         """Build a Random Forest  from the training set (X, y).
@@ -232,7 +232,7 @@ class RandomForest:
             #     X, y, self.bootstrap, self.random_state_) #self._check_random_state(seed))
             
             # Use joblib to parallelize tree fitting
-            tree = Parallel(n_jobs=-1)(delayed(self._build_tree)(X, y, seed)
+            tree, X_inbag, y_inbag, idxs_inbag = Parallel(n_jobs=-1)(delayed(self._build_tree)(X, y, seed)
                                              for seed in seed_list)
 
             # Fit tree using inbag samples
