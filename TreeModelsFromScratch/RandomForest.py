@@ -295,6 +295,10 @@ class RandomForest:
 
 
     def _bootstrap_samples(self, X, y, bootstrap, random_state):
+        # Convert integer seed to RandomState object
+        if isinstance(random_state, numbers.Integral):
+            random_state = np.random.RandomState(random_state)
+            
         print(f"Random state: {random_state}")  # Print the random state - This is the new that i used ...
         
         if bootstrap:
