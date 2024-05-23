@@ -161,8 +161,10 @@ class RandomForest:
         )
 
         # Draw bootstrap samples
-        X_inbag, y_inbag, idxs_inbag = self._bootstrap_samples(X, y, self.bootstrap, self.random_state_)
-    
+        # X_inbag, y_inbag, idxs_inbag = self._bootstrap_samples(X, y, self.bootstrap, self.random_state_)
+        X_inbag, y_inbag, idxs_inbag = self._bootstrap_samples(X, y, self.bootstrap, seed)
+        print(f"Seed used for bootstrap samples: {seed}")    # This is the new line that I added ....
+        
         tree.fit(X_inbag, y_inbag)
         return tree, idxs_inbag, X_inbag, y_inbag
 
@@ -293,7 +295,8 @@ class RandomForest:
 
 
     def _bootstrap_samples(self, X, y, bootstrap, random_state):
-
+        print(f"Random state: {random_state}")  # Print the random state - This is the new that i used ...
+        
         if bootstrap:
             n_samples = X.shape[0]
             idxs_inbag = random_state.choice(n_samples, n_samples, replace=True)
