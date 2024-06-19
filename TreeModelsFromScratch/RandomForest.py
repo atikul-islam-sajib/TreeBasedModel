@@ -1,4 +1,5 @@
 from joblib import Parallel, delayed
+from tqdm import tqdm
 from TreeModelsFromScratch.DecisionTree import DecisionTree
 import numpy as np
 import pandas as pd
@@ -83,10 +84,12 @@ class RandomForest:
 
         seed_list = self.random_state_.randint(np.iinfo(np.int32).max, size=self.n_trees)
 
-        results = Parallel(n_jobs=-1)(
-            delayed(self._build_tree)(X, y, seed)
-            for seed in seed_list
-        )
+        with tqdm(total=self.n_trees, desc="Building Trees") as pbar:
+            results = Parallel(n_jobs=-1)(
+                delayed(self._build_tree)(X, y, seed)
+                for seed in seed_list
+            )
+            pbar.update(len(results))
         
         self.trees, idxs_inbag_list, X_inbag_list, y_inbag_list = zip(*results)
 
