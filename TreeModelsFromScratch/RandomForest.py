@@ -168,9 +168,7 @@ class RandomForest:
 
     def _oob_samples(self, X, y, idxs_inbag):
         mask = np.ones(X.shape[0], dtype=bool)
-        mask[idx
-
-s_inbag] = False
+        mask[idxs_inbag] = False
         X_oob = X[mask]
         y_oob = y[mask]
         idxs_oob = mask.nonzero()[0]
