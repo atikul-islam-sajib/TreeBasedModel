@@ -1,0 +1,26 @@
+digraph {
+	0 [label="flavanoids
+<threshold: 1.385>
+gini=0.6546
+samples=142"]
+	1 [label="Leaf
+samples=46
+value=1
+dist=[0, 4]" shape=box]
+	2 [label="color_intensity
+<threshold: 3.49>
+gini=0.4861
+samples=96"]
+	5 [label="Leaf
+samples=18
+value=1
+dist=[2, 16]" shape=box]
+	6 [label="Leaf
+samples=38
+value=0
+dist=[38, 0]" shape=box]
+	2 -> 5 [label=True]
+	2 -> 6 [label=False]
+	0 -> 1 [label=True]
+	0 -> 2 [label=False]
+}

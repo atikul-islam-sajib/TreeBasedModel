@@ -510,3 +510,16 @@ class RandomForest:
         if shrinkage_type=="effect_size":
             tree.nodewise_HS_dict["cohen_reg_param"]=cohen_reg_param
             tree.nodewise_HS_dict["cohen_statistic"]=cohen_statistic
+            
+    def prune(self, min_samples_leaf=None):
+        """
+        Prune each tree in the random forest.
+        
+        Parameters
+        ----------
+        min_samples_leaf : int, default=None
+            The minimum number of samples required to be at a leaf node after pruning.
+            If None, use the minimum samples leaf defined in the tree.
+        """
+        for tree in self.trees:
+            tree.prune(min_samples_leaf)
