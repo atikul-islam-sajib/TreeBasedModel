@@ -214,6 +214,10 @@ class DecisionTree:
             parent_entropy = self._entropy(y)
         elif criterion == "gini":
             parent_gini = self._gini(y)
+        elif criterion == "mse":
+            parent_mse = np.mean((y - np.mean(y)) ** 2)
+        else:
+            raise ValueError(f"Unknown criterion: {criterion}")
 
         left_idxs, right_idxs = self._split(X_column, threshold)
 
@@ -233,7 +237,14 @@ class DecisionTree:
             child_gini = (n_l / n) * g_l + (n_r / n) * g_r
             information_gain = (n / self.no_samples_total) * (parent_gini - child_gini)
 
+        elif criterion == "mse":
+            mse_l, mse_r = np.mean((y[left_idxs] - np.mean(y[left_idxs])) ** 2), np.mean((y[right_idxs] - np.mean(y[right_idxs])) ** 2)
+            child_mse = (n_l / n) * mse_l + (n_r / n) * mse_r
+            information_gain = parent_mse - child_mse
+
         return information_gain
+
+
 
     def _split(self, X_column, split_thresh):
         left_idxs = np.argwhere(X_column <= split_thresh).flatten()
@@ -338,23 +349,43 @@ class DecisionTree:
 
 
     def prune(self, min_samples_leaf=None):
+        """
+        Prunes the decision tree by converting nodes with sample counts
+        less than or equal to min_samples_leaf into leaf nodes.
+
+        Parameters:
+        - min_samples_leaf: The minimum number of samples required at a node
+                            for it to remain a decision node. Nodes with
+                            fewer samples will be pruned.
+        """
         if min_samples_leaf is None:
             min_samples_leaf = self.min_samples_leaf
 
         pruned_nodes = 0
+
+        # Iterate through all decision paths
         for decision_path in self.decision_paths:
             for l, node_id in enumerate(decision_path):
                 node = self.node_list[node_id]
+                # Check if the number of samples at the node is less than or equal to the threshold
                 if node.samples <= min_samples_leaf:
                     pruned_nodes += 1
+                    # Convert this node to a leaf
                     self._make_leaf(node, self._get_y_for_node(node))
 
-        print(f"Pruned {pruned_nodes} nodes.")
+        # Print number of pruned nodes for debugging
+        # print(f"Pruned {pruned_nodes} nodes.")
+
+        # Recalculate the decision paths, sort node list, and update related attributes
         self._get_decision_paths()
         self.node_list = sorted(self.node_list, key=lambda o: o.id)
         self._create_node_dict()
+        
+        # Update the max depth of the tree
         depth_list = [len(i) for i in self.decision_paths]
         self.max_depth_ = max(depth_list) - 1
+        
+        # Recalculate feature importance
         self._get_feature_importance()
 
     def _make_leaf(self, node, y):
