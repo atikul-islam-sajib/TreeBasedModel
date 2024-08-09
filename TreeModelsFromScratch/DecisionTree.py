@@ -1,75 +1,159 @@
+from TreeModelsFromScratch.DecisionTree import DecisionTree
 import numpy as np
 import pandas as pd
-from collections import Counter
-import copy
-import numbers
+#from collections import Counter
 from warnings import warn, catch_warnings, simplefilter
+from sklearn.metrics import mean_squared_error, accuracy_score
+import numbers
+from shap.explainers._tree import SingleTree
+from shap import TreeExplainer
+from TreeModelsFromScratch.SmoothShap import verify_shap_model, smooth_shap, conf_int_ratio_two_var, conf_int_cohens_d, conf_int_ratio_mse_ratio
 
-class Node:
-    def __init__(self, feature=None, feature_name=None, threshold=None, left=None, right=None,
-                 gain=None, id=None, depth=None, leaf_node=False, samples=None, gini=None,
-                 value=None, clf_value_dis=None, clf_prob_dis=None, sample_indices=None):
-        self.feature = feature
-        self.feature_name = feature_name
-        self.threshold = threshold
-        self.left = left
-        self.right = right
-        self.gain = gain
-        self.gini = gini
-        self.value = value
-        self.clf_value_dis = clf_value_dis
-        self.clf_prob_dis = clf_prob_dis
-        self.id = id
-        self.depth = depth
-        self.samples = samples
-        self.leaf_node = leaf_node
-        self.sample_indices = sample_indices
+class RandomForest:
+    def __init__(self, n_trees=10, max_depth=None, min_samples_split=2, min_samples_leaf=1, n_feature="sqrt",
+                 bootstrap=True, oob=True, oob_SHAP=False, criterion="gini", treetype="classification", HShrinkage=False,
+                 HS_lambda=0, HS_smSHAP=False, HS_nodewise_shrink_type=None, cohen_reg_param=2, alpha=0.05,
+                 cohen_statistic="f", k=None, random_state=None, testHS=False):
+        """A random forest model for classification or regression tasks.
 
-    def is_leaf_node(self):
-        return self.leaf_node is not False
+        Parameters
+        ----------
+        treetype : {"classification", "regression"}, default="classification"
+            Type of decision tree:
+                - ``classification``: Binary classification tasks
+                - ``regression``: Regression tasks
+        criterion : {"gini", "entropy"}, default="gini"
+            The function to measure the quality of a split. Supported criteria are
+            "gini" for the Gini impurity and "entropy".
+            Please note that for regression trees the criterion is still called "gini",
+            but internally the MSE is used.
+        max_depth : int, default=None
+            The maximum depth of the tree. If None, then nodes are expanded until
+            the split would not lead to additional gain in purity, all leaves are
+            pure or until all leaves contain less than min_samples_split samples.
+        min_samples_split : int, default=2
+            The minimum number of samples required to split an internal node
+        min_samples_leaf : int, default=1
+            The minimum number of samples required to be at a leaf node.
+            A split point at any depth will only be considered if it leaves at
+            least ``min_samples_leaf`` training samples in each of the left and
+            right branches.
+        n_feature : int, float or "sqrt", default=None
+            The number of features to consider when looking for the best split
+            (similar to `max_features` in sklearn):
+                - If int, then consider `n_feature` features at each split.
+                - If float, then `n_feature` is a fraction and
+                `max(1, int(n_feature * n_features_in_))` features are considered at
+                each split.
+                - If "sqrt", then `max_features=sqrt(n_feature)`.
+                - If None, then `max_features=n_feature`.
+        random_state : int, RandomState instance or None, default=None
+            Controls the randomness of the estimator. If e.g. multiple split-points
+            yield the same gain, the best split is chosen randomly from that set.
+            To obtain a deterministic behaviour during fitting, ``random_state``
+            has to be fixed to an integer.
+        HShrinkage : bool, default=False
+            If Hierarchical Shrinkage should be applied post-hoc after fitting.
+            Please note, that if you intend to use HS, you also need to define the
+            `HS_lambda` parameter or use GridSearch.
+        HS_lambda : int, default=0
+            User-defined penalty term used in Hierarchical Shrinkage regularization.
+        bootstrap : bool, default=True
+            If bootstrap sampling should be used to fit the ensemble. If `False`
+            each tree in the ensemble will use the complete training data during
+            fitting
+        oob : bool, default=True
+            If OOB samples should be stored and used to calculate unbiased estimator
+            of model performance.
+        oob_SHAP : bool, default=False
+            If True inbag and OOB SHAP values are calculated for the ensemble and
+            stored as class attributes.
+            Note that `oob=True` in order to calculate oob SHAP values
+        HS_smSHAP : bool, default=False
+            If True AugHS smSHAP regularization will be used post-hoc after fitting.
+            Note that `oob=True` and `oob_SHAP=True` in order to be able to use AugHS smSHAP
+        HS_nodewise_shrink_type : {"MSE_ratio"}, default=None
+            If AugHS MSE regularization should be used post-hoc after fitting.
+            Note that `oob=True` in order to be able to use AugHS MSE
+        alpha : float, default=0.05
+            Alpha used to determine the confidence interval in AugHS MSE regularization.
+        cohen_statistic : {"f"}, default=None
+            Not implemented. Alternative to AugHS MSE.
+        cohen_reg_param : int, default=2
+            Not implemented. Alternative to AugHS MSE.
+        testHS : bool, default=False
+            Used for testing of other HS penalties which can be implemented in the
+            DecisionTree._apply_hierarchical_srinkage function.
+        k : int, default=None
+            Finite sample correction in Gini impurity
+                - If k=1, impurity is weighted by n/(n-1)
+        Attributes
+        ----------
+        feature_importances_ : ndarray of shape (n_features,)
+            The impurity-based feature importances (MDI).
+            The higher, the more important the feature.
+            The importance of a feature is computed as the (normalized)
+            total reduction of the criterion brought by that feature.  It is also
+            known as the Gini importance.
+            Warning: impurity-based feature importances can be misleading for
+            high cardinality features (many unique values).
+        trees : list of DecisionTree instances
+            List of fitted DecisonTree models in the RF ensemble.
+        random_state: int, RandomState instance or None
+            The random state declared during instantiation
+        random_state_: RandomState instance
+            The RandomState instance used in the DecisionTree (derived from random_state)
+        """
 
-class DecisionTree:
-    def __init__(self, min_samples_split=2, min_samples_leaf=1, max_depth=None, n_features=None, criterion="gini",
-                 treetype="classification", k=None, feature_names=None, HShrinkage=False, HS_lambda=0, random_state=None):
-        self.min_samples_split = min_samples_split
-        self.min_samples_leaf = min_samples_leaf
-        self.max_depth = max_depth
-        self.n_features = n_features
-        self.feature_names = feature_names
-        self.root = None
+        self.n_trees = n_trees
+        self.max_depth=max_depth
+        self.min_samples_split=min_samples_split
+        self.min_samples_leaf = min_samples_leaf  # Still need to be implemented
+        self.n_features=n_feature
+        self.bootstrap=bootstrap
+        self.oob = oob
+        self.oob_SHAP=oob_SHAP #for calculation of shap scores for oob predictions
         self.criterion = criterion
         self.k = k
-        self.treetype = treetype
         self.HShrinkage = HShrinkage
         self.HS_lambda = HS_lambda
+        self.HS_smSHAP = HS_smSHAP # for smooth SHAP hierarchical shrinkage
+        self.HS_nodewise_shrink_type = HS_nodewise_shrink_type #For nodewise smoothing ("MSE_ratio" or "effect_size")
+        self.cohen_reg_param = cohen_reg_param #For nodewise smoothing
+        self.alpha = alpha #For nodewise smoothing
+        self.cohen_statistic = cohen_statistic #For nodewise smoothing
+        self.treetype = treetype
         self.random_state = random_state
         self.random_state_ = self._check_random_state(random_state)
-        self.n_nodes = 0
-        self.oob_preds = None
-        self.oob_shap = None
-        self.HS_applied = False
+        #self.random_state = np.random.default_rng(random_state)
+        self.trees = []
+        self.feature_names = None
+        self.smSHAP_HS_applied = False
+        self.nodewise_HS_applied = False
+        self.testHS = testHS
 
     def _check_random_state(self, seed):
-        if isinstance(seed, numbers.Integral) or (seed is None):
+        if isinstance(seed, numbers.Integral) or seed==None:
             return np.random.RandomState(seed)
+            #return np.random.default_rng(seed)
         if isinstance(seed, np.random.RandomState):
             return seed
 
     def fit(self, X, y):
-        if not self.n_features:
-            self.n_features = X.shape[1]
-        elif self.n_features == "sqrt":
-            self.n_features = int(np.rint(np.sqrt(X.shape[1])))
-        elif isinstance(self.n_features, float):
-            self.n_features = max(1, int(self.n_features * X.shape[1]))
-        else:
-            self.n_features = min(X.shape[1], self.n_features)
+        """Build a Random Forest  from the training set (X, y).
+        Parameters
+        ----------
+        X : {array-like, pd.DataFrame} of shape (n_samples, n_features)
+            The training input samples
+        y : {array-like, pd.Series} of shape (n_samples,)
+            The target values (class labels) as integers
+        Returns
+        -------
+        self : DecisionTree
+            Fitted estimator.
+        """
 
-        self.features_in_ = range(X.shape[1])
-        self.node_list = []
-        self.node_id_dict = {}
-        self.no_samples_total = y.shape[0]
-        self.y = y  # Store y in the class
+        self.trees = []
 
         if isinstance(X, pd.DataFrame):
             self.feature_names = X.columns
@@ -77,525 +161,365 @@ class DecisionTree:
         if isinstance(y, pd.Series):
             y = y.values
 
-        self.root = self._grow_tree(X, y, np.arange(y.shape[0]), feature_names=self.feature_names)
-        self._get_decision_paths()
-        self.node_list = sorted(self.node_list, key=lambda o: o.id)
+        if self.oob:
+            #empty list of lists to keep track of which tree predicted each oob observation (only for analyzing/debugging purposes)
+            self.oob_preds_tree_id = [
+                [] for _ in range(X.shape[0])
+            ]
 
-        if self.HShrinkage:
-            self._apply_hierarchical_srinkage(treetype=self.treetype)
-        self._create_node_dict()
-        depth_list = [len(i) for i in self.decision_paths]
-        self.max_depth_ = max(depth_list) - 1
-        self._get_feature_importance()
+        if self.oob_SHAP:
+            #Create array filled with nans in shape [n_obs, n_feats, n_trees] for shap oob
+            shap_scores_inbag = np.full([X.shape[0], X.shape[1], self.n_trees], np.nan)
+            shap_scores_oob = np.full([X.shape[0], X.shape[1], self.n_trees], np.nan)
+
+        #Empty array to store individual feature importances p. tree in the forest
+        feature_importance_trees = np.empty((self.n_trees, X.shape[1]))
+
+        #Create random seeds for each tree in the forest
+        MAX_INT = np.iinfo(np.int32).max
+        seed_list = self.random_state_.randint(MAX_INT, size=self.n_trees)
+
+        #Create forest
+        for i, seed in zip(range(self.n_trees), seed_list):
+            #for _ in range(self.n_trees):
+
+            #Instantiate tree
+            tree = DecisionTree(max_depth=self.max_depth,
+                                min_samples_split=self.min_samples_split,
+                                min_samples_leaf=self.min_samples_leaf,
+                                n_features=self.n_features,
+                                criterion=self.criterion,
+                                treetype=self.treetype,
+                                feature_names=self.feature_names,
+                                HShrinkage=self.HShrinkage,
+                                HS_lambda=self.HS_lambda,
+                                k=self.k,
+                                random_state=seed)#self.random_state)
+
+            #Draw bootstrap samples (inbag)
+            X_inbag, y_inbag, idxs_inbag = self._bootstrap_samples(
+                X, y, self.bootstrap, self.random_state_) #self._check_random_state(seed))
+
+            # Fit tree using inbag samples
+            tree.fit(X_inbag, y_inbag)
+            self.trees.append(tree) #Add tree to forest
+            feature_importance_trees[i, :] = tree.feature_importances_ #add feature importance to array
+
+            # Draw oob samples (which have not been used for training) and predict oob observations
+            if self.oob:
+                n_samples = X.shape[0]
+                tree.oob_preds = np.full(n_samples, np.nan)#np.zeros(n_samples, dtype=np.float64)
+                #n_oob_pred = np.zeros(n_samples, dtype=np.int64)
+
+                X_oob, y_oob, idxs_oob = self._oob_samples(X, y, idxs_inbag)
+
+                tree.oob_preds[idxs_oob] = tree.predict(X_oob)
+
+                for j in idxs_oob:
+                    self.oob_preds_tree_id[j].append(i)
+
+                # Apply nodewise HS
+                if self.HS_nodewise_shrink_type != None:
+                    self.apply_nodewise_HS(tree, X_inbag, y_inbag, X_oob, y_oob, shrinkage_type=self.HS_nodewise_shrink_type, HS_lambda=self.HS_lambda, cohen_reg_param=self.cohen_reg_param, alpha=self.alpha, cohen_statistic=self.cohen_statistic, testHS=self.testHS)
+
+                # Compute inbag and oob SHAP values
+                if self.oob_SHAP:
+
+                    #Create array with nan for single tree shap values which can be pasted in shap_scores_oob array
+                    shap_scores_inbag_tree = np.full([X.shape[0], X.shape[1]], np.nan)
+                    shap_scores_oob_tree = np.full([X.shape[0], X.shape[1]], np.nan)
+
+                    #Create shap explainer for individual tree
+                    export_tree = tree.export_tree_for_SHAP()
+                    explainer_tree = TreeExplainer(export_tree)
+                    verify_shap_model(tree, explainer_tree, X_inbag)
+
+                    #Calculate shap scores for oob
+                    shap_tree_inbag = explainer_tree.shap_values(X_inbag)
+                    shap_tree_oob = explainer_tree.shap_values(X_oob)
+
+                    #Put shap oob scores in correct position of array (correct idx of observation)
+                    np.put_along_axis(shap_scores_inbag_tree,
+                                      idxs_inbag.reshape(idxs_inbag.shape[0], 1),
+                                      shap_tree_inbag,
+                                      axis=0)
+                    np.put_along_axis(shap_scores_oob_tree,
+                                      idxs_oob.reshape(idxs_oob.shape[0], 1),
+                                      shap_tree_oob,
+                                      axis=0)
+
+                    # Update values of overall shap_scores_oob array
+                    shap_scores_inbag[:, :, i] = shap_scores_inbag_tree.copy()
+                    shap_scores_oob[:, :, i] = shap_scores_oob_tree.copy()
+
+        # Calculate and set feature importance of forest as class attribute
+        self.feature_importances_ = feature_importance_trees.mean(axis=0)
+
+        # Calculate oob_score for all trees within forest
+        if self.oob:
+
+            #surpress unnecessary np.nanmean error
+            with catch_warnings():
+                simplefilter("ignore", category=RuntimeWarning)
+
+                # Get mean value for each oob prediction ignoring the nan values (nan will be kept only if there is no prediction from none of the trees in the forest)
+                self.oob_preds_forest = np.nanmean([tree.oob_preds for tree in self.trees], axis=0)
+            y_test_oob = y.copy()
+
+            # Check if there are any y obs where there is no oob prediction:
+            if np.isnan(self.oob_preds_forest).any():
+
+                # identify index of all nan values (where no oob pred is found)
+                nan_indxs = np.argwhere(np.isnan(self.oob_preds_forest))
+
+                #Throw UserWarning of how many values did not have an oob prediction
+                message = """{} out of {} samples do not have OOB scores. This probably means too few trees were used to compute any reliable OOB estimates. These samples were dropped before computing the oob_score""".format(len(nan_indxs), len(y))
+                warn(message)
+
+                # drop these NaN values from X_oob_preds and y_test_oob
+                mask = np.ones(self.oob_preds_forest.shape[0], dtype=bool)
+                mask[nan_indxs] = False
+                self.oob_preds_forest = self.oob_preds_forest[mask]
+                y_test_oob = y[mask]
+
+            # calculate oob_score and store score as class attribute
+            if self.treetype=="classification":
+                self.oob_preds_forest = self.oob_preds_forest
+                self.oob_score = accuracy_score(
+                    y_test_oob, self.oob_preds_forest.round(0))  #round to full number 0 or 1 for accuracy
+            elif self.treetype=="regression":
+                self.oob_score = mean_squared_error(y_test_oob, self.oob_preds_forest, squared=False) #RMSE
+
+            #set attribute to store that nodewise HS was used
+            if self.HS_nodewise_shrink_type != None:
+                self.nodewise_HS_applied = True
+
+            # Calculate average shap scores inbag and oob
+            if self.oob_SHAP:
+                self.inbag_SHAP_values = np.nanmean(shap_scores_inbag, axis=2)
+                self.oob_SHAP_values = np.nanmean(shap_scores_oob, axis=2)
+
+                # Apply Smooth SHAP HS
+                if self.HS_smSHAP:
+                    self.apply_smSHAP_HS(HS_lambda=self.HS_lambda)
 
 
-    def _create_node_dict(self):
-        for node in self.node_list:
-            self.node_id_dict[node.id] = {
-                "node": node,
-                "id": node.id,
-                "depth": node.depth,
-                "feature": node.feature_name or node.feature,
-                "is_leaf_node": node.leaf_node,
-                "threshold": node.threshold,
-                "gini": node.gini,
-                "samples": node.samples,
-                "value": node.value,
-                "sample_indices": node.sample_indices
-            }
-            if self.treetype == "classification":
-                self.node_id_dict[node.id]["value_distribution"] = node.clf_value_dis
-                self.node_id_dict[node.id]["prob_distribution"] = list(node.clf_prob_dis)
+    def _bootstrap_samples(self, X, y, bootstrap, random_state):
 
-    def _grow_tree(self, X, y, sample_indices, depth=0, feature_names=None):
-        n_samples, n_feats = X.shape
-        n_labels = len(np.unique(y))
-
-        if self.treetype == "classification":
-            counter = Counter(y)
-            clf_value_dis = [counter.get(0) or 0, counter.get(1) or 0]
-            clf_prob_dis = (np.array(clf_value_dis) / n_samples)
-            leaf_value = np.argmax(clf_prob_dis)
-
-        elif self.treetype == "regression":
-            leaf_value = self._mean_label(y)
-            clf_value_dis = None
-            clf_prob_dis = None
-
-        if ((self.max_depth is not None) and ((depth >= self.max_depth))
-                or (n_labels == 1) or (n_samples < self.min_samples_split)
-                or ((self.k != None) and (n_samples <= self.k))):
-            node = self._create_leaf(leaf_value, clf_value_dis, clf_prob_dis, y, depth, n_samples, sample_indices)
-            return node
-
-        feat_idxs = self.random_state_.choice(n_feats, self.n_features, replace=False)
-        best_feature, best_thresh, best_gain = self._best_split(X, y, feat_idxs)
-
-        if (best_gain == -1) or (best_feature is None) or (best_thresh is None):
-            node = self._create_leaf(leaf_value, clf_value_dis, clf_prob_dis, y, depth, n_samples, sample_indices)
-            return node
-
-        left_idxs, right_idxs = self._split(X[:, best_feature], best_thresh)
-
-        if (len(left_idxs) < self.min_samples_leaf) or (len(right_idxs) < self.min_samples_leaf) or (
-                (self.k != None) and ((len(left_idxs) <= self.k) or (len(right_idxs) <= self.k))):
-            node = self._create_leaf(leaf_value, clf_value_dis, clf_prob_dis, y, depth, n_samples, sample_indices)
-            return node
-
-        left = self._grow_tree(X[left_idxs, :], y[left_idxs], sample_indices[left_idxs], depth + 1, feature_names)
-        right = self._grow_tree(X[right_idxs, :], y[right_idxs], sample_indices[right_idxs], depth + 1, feature_names)
-
-        best_feature_name = None
-        if feature_names is not None:
-            best_feature_name = feature_names[best_feature]
-
-        node = Node(best_feature,
-                    best_feature_name,
-                    best_thresh,
-                    left,
-                    right,
-                    best_gain,
-                    gini=self._gini(y),
-                    depth=depth,
-                    value=leaf_value,
-                    clf_value_dis=clf_value_dis,
-                    clf_prob_dis=clf_prob_dis,
-                    samples=n_samples,
-                    sample_indices=sample_indices)
-        self.node_list.append(node)
-        return node
-
-    def _create_leaf(self, leaf_value, clf_value_dis, clf_prob_dis, y, depth, n_samples, sample_indices):
-        node = Node(value=leaf_value,
-                    clf_value_dis=clf_value_dis,
-                    clf_prob_dis=clf_prob_dis,
-                    leaf_node=True,
-                    gini=self._gini(y),
-                    depth=depth,
-                    samples=n_samples,
-                    sample_indices=sample_indices)
-        self.node_list.append(node)
-        return node
-
-    def _best_split(self, X, y, feat_idxs):
-        best_gain = np.array([-1])
-        split_idx, split_threshold = None, None
-
-        for feat_idx in feat_idxs:
-            X_column = X[:, feat_idx]
-            thresholds = np.unique(X_column)
-
-            if len(thresholds) == 1:
-                gain = self._information_gain(y, X_column, thresholds[0])
-                if gain > best_gain.max():
-                    best_gain = np.array([gain])
-                    split_idx = np.array([feat_idx])
-                    split_threshold = thresholds
-
-            for index in range(1, len(thresholds)):
-                thr = (thresholds[index] + thresholds[index - 1]) / 2
-                gain = self._information_gain(y, X_column, thr)
-                if gain > best_gain.max():
-                    best_gain = np.array([gain])
-                    split_idx = np.array([feat_idx])
-                    split_threshold = np.array([thr])
-                elif gain == best_gain.all():
-                    best_gain = np.append(best_gain, gain)
-                    split_idx = np.append(split_idx, feat_idx)
-                    split_threshold = np.append(split_threshold, thr)
-
-        idx_best = self.random_state_.choice(best_gain.shape[0], 1)[0]
-        return split_idx[idx_best], split_threshold[idx_best], best_gain[idx_best]
-
-    def _information_gain(self, y, X_column, threshold):
-        criterion = self.criterion
-
-        if criterion == "entropy":
-            parent_entropy = self._entropy(y)
-        elif criterion == "gini":
-            parent_gini = self._gini(y)
-        elif criterion == "mse":
-            parent_mse = np.mean((y - np.mean(y)) ** 2)
+        if bootstrap:
+            n_samples = X.shape[0]
+            idxs_inbag = random_state.choice(n_samples, n_samples, replace=True)
+            return X[idxs_inbag], y[idxs_inbag], idxs_inbag
         else:
-            raise ValueError(f"Unknown criterion: {criterion}")
+            return X, y, np.arange(X.shape[0])
 
-        left_idxs, right_idxs = self._split(X_column, threshold)
-
-        if len(left_idxs) == 0 or len(right_idxs) == 0:
-            return 0
-
-        n = len(y)
-        n_l, n_r = len(left_idxs), len(right_idxs)
-
-        if criterion == "entropy":
-            e_l, e_r = self._entropy(y[left_idxs]), self._entropy(y[right_idxs])
-            child_entropy = (n_l / n) * e_l + (n_r / n) * e_r
-            information_gain = parent_entropy - child_entropy
-
-        elif criterion == "gini":
-            g_l, g_r = self._gini(y[left_idxs]), self._gini(y[right_idxs])
-            child_gini = (n_l / n) * g_l + (n_r / n) * g_r
-            information_gain = (n / self.no_samples_total) * (parent_gini - child_gini)
-
-        elif criterion == "mse":
-            mse_l, mse_r = np.mean((y[left_idxs] - np.mean(y[left_idxs])) ** 2), np.mean((y[right_idxs] - np.mean(y[right_idxs])) ** 2)
-            child_mse = (n_l / n) * mse_l + (n_r / n) * mse_r
-            information_gain = parent_mse - child_mse
-
-        return information_gain
-
-
-
-    def _split(self, X_column, split_thresh):
-        left_idxs = np.argwhere(X_column <= split_thresh).flatten()
-        right_idxs = np.argwhere(X_column > split_thresh).flatten()
-        return left_idxs, right_idxs
-
-    def _entropy(self, y):
-        hist = np.bincount(y)
-        ps = hist / len(y)
-        return -np.sum([p * np.log(p) for p in ps if p > 0])
-
-    def _gini(self, y):
-        n = len(y)
-        k = self.k
-
-        if self.treetype == "classification":
-            _, counts = np.unique(y, return_counts=True)
-            probabilities = counts / counts.sum()
-            impurity = 1 - sum(probabilities ** 2)
-
-        elif self.treetype == "regression":
-            if len(y) == 0:
-                impurity = 0
-            else:
-                impurity = np.mean((y - np.mean(y)) ** 2)
-
-        if (k != None) and (n > k):
-            impurity = impurity * n / (n - k)
-        elif (k != None) and (n <= k):
-            impurity = 1
-        return impurity
-
-    def _mean_label(self, y):
-        return np.mean(y)
-
-    def predict(self, X):
-        if isinstance(X, pd.DataFrame):
-            X = X.values
-
-        if isinstance(X, pd.Series):
-            return np.array(self._traverse_tree(X, self.root))
-        else:
-            return np.array([self._traverse_tree(x, self.root) for x in X])
+    def _oob_samples(self, X, y, idxs_inbag):
+        mask = np.ones(X.shape[0], dtype=bool)
+        mask[idxs_inbag] = False
+        X_oob = X[mask]
+        y_oob = y[mask]
+        idxs_oob = mask.nonzero()[0]
+        return X_oob, y_oob, idxs_oob
 
     def predict_proba(self, X):
+        """Predict class probabilities of the input samples X.
+        The predicted class probability is the fraction of samples of the same
+        class in a leaf. Can only be used if `treetype="classification"`
+        Parameters
+        ----------
+        X : {array-like, pd.DataFrame} of shape (n_samples, n_features)
+            The training input samples
+        Returns
+        -------
+        proba : ndarray of shape (n_samples, 2)
+            The class probabilities of the input samples.
+        """
+        # If function is called on a regression tree return nothing
         if self.treetype != "classification":
-            message = "This function is only available for classification tasks"
+            message = "This function is only available for classification tasks. This model is of type {}".format(
+                self.treetype)
             warn(message)
             return
 
         if isinstance(X, pd.DataFrame):
             X = X.values
 
-        if isinstance(X, pd.Series):
-            return np.array(self._traverse_tree(X, self.root, pred_proba=True))
-        else:
-            return np.array([self._traverse_tree(x, self.root, pred_proba=True) for x in X])
+        predictions = np.array([tree.predict_proba(X) for tree in self.trees])
+        tree_preds = np.swapaxes(predictions, 0, 1)
 
-    def _traverse_tree(self, x, node, pred_proba=False):
-        if node.is_leaf_node():
-            if pred_proba:
-                return node.clf_prob_dis
-            else:
-                return node.value
+        predictions = np.array([np.mean(pred, axis=0) for pred in tree_preds])
 
-        if x[node.feature] <= node.threshold:
-            return self._traverse_tree(x, node.left, pred_proba)
-        return self._traverse_tree(x, node.right, pred_proba)
+        return predictions
 
-    def _get_feature_importance(self):
-        feature_importance = np.zeros(len(self.features_in_))
-        features_list = [i.feature for i in self.node_list]
-        feat_imp_p_node = np.nan_to_num(np.array([i.gain for i in self.node_list], dtype=float))
-
-        for feat_num, feat_imp in zip(features_list, feat_imp_p_node):
-            if feat_num is not None:
-                feature_importance[feat_num] += feat_imp
-
-        if np.sum(feature_importance) != 0:
-            feature_importance_scaled = np.divide(feature_importance, (np.sum(feature_importance)))
-        else:
-            feature_importance_scaled = feature_importance
-
-        self.feature_importances_ = feature_importance_scaled
-
-    def _get_decision_paths(self):
-        self.decision_paths = list(self._paths(self.root))
-        self.decision_paths_str = ["->".join(map(str, path)) for path in self.decision_paths]
-
-    def _paths(self, node, p=()):
-        if node.left or node.right:
-            if node.id is None:
-                node.id = self.n_nodes
-                self.n_nodes += 1
-            yield from self._paths(node.left, (*p, node.id))
-            yield from self._paths(node.right, (*p, node.id))
-        else:
-            if node.id is None:
-                node.id = self.n_nodes
-                self.n_nodes += 1
-            yield (*p, node.id)
-
-
-    def prune(self, min_samples_leaf=None):
+    def predict(self, X):
         """
-        Prunes the decision tree by converting nodes with sample counts
-        less than or equal to min_samples_leaf into leaf nodes.
-
-        Parameters:
-        - min_samples_leaf: The minimum number of samples required at a node
-                            for it to remain a decision node. Nodes with
-                            fewer samples will be pruned.
+        - Classification: Predict class for the input samples X.
+        - Regression: Predict value for the input samples X
+        Parameters
+        ----------
+        X : {array-like, pd.DataFrame} of shape (n_samples, n_features)
+            The training input samples
+        Returns
+        -------
+        proba : ndarray of shape (n_samples, 2)
+            The class probabilities of the input samples.
         """
-        if min_samples_leaf is None:
-            min_samples_leaf = self.min_samples_leaf
-
-        pruned_nodes = 0
-
-        # Iterate through all decision paths
-        for decision_path in self.decision_paths:
-            for l, node_id in enumerate(decision_path):
-                node = self.node_list[node_id]
-                # Check if the number of samples at the node is less than or equal to the threshold
-                if node.samples <= min_samples_leaf:
-                    pruned_nodes += 1
-                    # Convert this node to a leaf
-                    self._make_leaf(node, self._get_y_for_node(node))
-
-        # Print number of pruned nodes for debugging
-        # print(f"Pruned {pruned_nodes} nodes.")
-
-        # Recalculate the decision paths, sort node list, and update related attributes
-        self._get_decision_paths()
-        self.node_list = sorted(self.node_list, key=lambda o: o.id)
-        self._create_node_dict()
-        
-        # Update the max depth of the tree
-        depth_list = [len(i) for i in self.decision_paths]
-        self.max_depth_ = max(depth_list) - 1
-        
-        # Recalculate feature importance
-        self._get_feature_importance()
-
-    def _make_leaf(self, node, y):
-        node.leaf_node = True
-        node.left = None
-        node.right = None
-        if self.treetype == "classification":
-            counter = Counter(y)
-            node.clf_value_dis = [counter.get(0) or 0, counter.get(1) or 0]
-            node.clf_prob_dis = (np.array(node.clf_value_dis) / node.samples)
-            node.value = np.argmax(node.clf_prob_dis)
-        elif self.treetype == "regression":
-            node.value = self._mean_label(y)
-        node.gini = self._gini(y)
-        node.samples = len(y)
-
-    def _get_y_for_node(self, node):
-        sample_indices = node.sample_indices
-        return self.y[sample_indices]
-
-    def traverse_explain_path(self, x, node=None, dict_list=None):
-        if dict_list is None:
-            dict_list = []
-
-        dict_node = {"node_id": node.id}
-
-        if node.is_leaf_node():
-            if self.treetype == "classification":
-                dict_node.update([("value", node.value), ("prob_distribution", node.clf_prob_dis)])
-                dict_list.append(dict_node)
-                return [dic.get("node_id") for dic in dict_list], dict_list
-            dict_node["value"] = node.value
-            dict_list.append(dict_node)
-            return [dic.get("node_id") for dic in dict_list], dict_list
-
-        dict_node.update([("feature", node.feature_name or node.feature),
-                          ("threshold", np.round(node.threshold, 3)),
-                          ("value_observation", x[node.feature].round(3))])
-
-        if x[node.feature] <= node.threshold:
-            dict_node["decision"] = "{} <= {} --> left".format(x[node.feature].round(3), np.round(node.threshold, 3))
-            dict_list.append(dict_node)
-            return self.traverse_explain_path(x, node.left, dict_list)
-        dict_node["decision"] = "{} > {} --> right".format(x[node.feature].round(3), np.round(node.threshold, 3))
-        dict_list.append(dict_node)
-        return self.traverse_explain_path(x, node.right, dict_list)
-
-    def explain_decision_path(self, X):
         if isinstance(X, pd.DataFrame):
             X = X.values
 
-        if isinstance(X, pd.Series):
-            return np.array(self.traverse_explain_path(X, self.root), dtype="object")
+        if self.treetype=="regression":
+            predictions = np.array([tree.predict(X) for tree in self.trees])
+            tree_preds = np.swapaxes(predictions, 0, 1)
+            predictions = np.mean(tree_preds, axis=1)
+            return predictions
 
-        return np.array([self.traverse_explain_path(x, self.root) for x in X], dtype="object")
+        elif self.treetype=="classification":
+            predictions = np.argmax(self.predict_proba(X),axis=1)
+            return predictions
 
-    def _apply_hierarchical_srinkage(self, treetype=None, HS_lambda=None, smSHAP_coefs=None, m_nodes=None, testHS=False):
-        if treetype == None:
-            treetype = self.treetype
-        if HS_lambda == None:
-            HS_lambda = self.HS_lambda
+    def export_forest_for_SHAP(self):
+        """
+        Exports RandomForest model into readable format for SHAP
+        Returns
+        -------
+        model : list
+            List of SHAP SingleTree models which is readable by SHAP Tree Explainer to
+            recreate the RF model.
+        Example
+        -------
+        >>export_model = rf.export_forest_for_SHAP()
+        >>explainer = shap.TreeExplainer(export_model)
+        >>shap_vals = explainer.shap_values(X_train, y_train)
+        """
+        tree_dicts = []
+        for tree in self.trees:
 
-        if treetype == "regression":
-            node_values_HS = np.zeros(len(self.node_list))
-            for decision_path in self.decision_paths:
-                cum_sum = 0
-                for l, node_id in enumerate(decision_path):
-                    if l == 0:
-                        cum_sum = self.node_list[node_id].value
-                        node_values_HS[node_id] = cum_sum
-                        continue
+            _, tree_dict = tree.export_tree_for_SHAP(return_tree_dict=True)
 
-                    current_node = self.node_list[node_id]
-                    node_id_parent = decision_path[l - 1]
-                    parent_node = self.node_list[node_id_parent]
+            tree_dicts.append(tree_dict)
 
-                    if (smSHAP_coefs != None):
-                        cum_sum += ((current_node.value - parent_node.value) / (1 + HS_lambda / parent_node.samples)) * np.abs(smSHAP_coefs[parent_node.feature])
-                    elif (m_nodes != None):
-                        cum_sum += ((current_node.value - parent_node.value) / (1 + HS_lambda / parent_node.samples)) * m_nodes[node_id]
-                    else:
-                        cum_sum += ((current_node.value - parent_node.value) / (1 + HS_lambda / parent_node.samples))
-
-                    node_values_HS[node_id] = cum_sum
-
-            for node_id, value in enumerate(node_values_HS):
-                self.node_list[node_id].value = value
-
-        elif treetype == "classification":
-            clf_prob_dist = np.array(copy.deepcopy([node_id.clf_prob_dis for node_id in self.node_list]))
-            node_samples = copy.deepcopy([node_id.samples for node_id in self.node_list])
-            node_values_HS = np.zeros((len(node_samples), 2))
-
-            for decision_path in self.decision_paths:
-                node_values_ = np.zeros((len(node_samples), 2))
-                cum_sum = 0
-                for l, node_id in enumerate(decision_path):
-                    if l == 0:
-                        cum_sum = copy.deepcopy(clf_prob_dist[node_id])
-                        node_values_[node_id] = cum_sum
-                        continue
-
-                    current_node = self.node_list[node_id]
-                    node_id_parent = decision_path[l - 1]
-                    parent_node = self.node_list[node_id_parent]
-
-                    if (smSHAP_coefs != None):
-                        cum_sum += ((clf_prob_dist[node_id] - clf_prob_dist[node_id_parent]) / (1 + HS_lambda / node_samples[node_id_parent])) * np.abs(smSHAP_coefs[parent_node.feature])
-                    elif (m_nodes != None):
-                        cum_sum += ((clf_prob_dist[node_id] - clf_prob_dist[node_id_parent]) / (1 + HS_lambda / node_samples[node_id_parent])) * m_nodes[node_id]
-                    else:
-                        cum_sum += ((clf_prob_dist[node_id] - clf_prob_dist[node_id_parent]) / (1 + HS_lambda / node_samples[node_id_parent]))
-
-                    node_values_[node_id] = cum_sum
-                for node_id in decision_path:
-                    node_values_HS[node_id] = node_values_[node_id]
-
-            for node_id in range(len(self.node_list)):
-                self.node_list[node_id].clf_prob_dis = node_values_HS[node_id]
-                self.node_list[node_id].value = np.argmax(self.node_list[node_id].clf_prob_dis)
-
-        self.HS_applied = True
-
-    def export_tree_for_SHAP(self, return_tree_dict=False):
-        children_left = []
-        children_right = []
-
-        for node in self.node_list:
-            if node.left is not None:
-                children_left.append(node.left.id)
-            else:
-                children_left.append(-1)
-            if node.right is not None:
-                children_right.append(node.right.id)
-            else:
-                children_right.append(-1)
-
-        children_left = np.array(children_left)
-        children_right = np.array(children_right)
-        children_default = children_right.copy()
-
-        features = np.array([node.feature if node.feature is not None else -2 for node in self.node_list])
-        thresholds = np.array([node.threshold if node.threshold is not None else -2 for node in self.node_list])
-
-        if self.treetype == "regression":
-            values = np.array([node.value for node in self.node_list])
-        elif self.treetype == "classification":
-            values = np.array([node.clf_prob_dis[1] for node in self.node_list])
-        values = values.reshape(values.shape[0], 1)
-
-        samples = np.array([float(node.samples) for node in self.node_list])
-
-        tree_dict = {
-            "children_left": children_left,
-            "children_right": children_right,
-            "children_default": children_default,
-            "features": features,
-            "thresholds": thresholds,
-            "values": values,
-            "node_sample_weight": samples
-        }
-        model = {"trees": [tree_dict]}
-
-        if return_tree_dict:
-            return model, tree_dict
+        if self.treetype=="regression":
+            # model = {
+            #     "trees":[SingleTree(t, scaling=1.0 / len(tree_dicts)) for t in tree_dicts],
+            #     #"base_offset": scipy.special.logit(orig_model2.init_.class_prior_[1]),
+            #     "tree_output": "raw_value",
+            #     "scaling": 1.0 / len(tree_dicts),
+            #     "objective": "squared_error",
+            #     "input_dtype": np.
+            #     float32,  # this is what type the model uses the input feature data
+            #     "internal_dtype": np.
+            #     float64  # this is what type the model uses for values and thresholds
+            # }
+            model = [
+                SingleTree(t, scaling=1.0 / len(tree_dicts))
+                for t in tree_dicts
+            ]
+        elif self.treetype=="classification":
+            # model = {
+            #     #"trees": tree_dicts,
+            #     "trees":[SingleTree(t, scaling=1.0 / len(tree_dicts)) for t in tree_dicts],
+            #     #"base_offset":0.6274165202108963,  #scipy.special.logit(orig_model2.init_.class_prior_[1]),
+            #     "tree_output": "probability",
+            #     "scaling": 1.0/len(tree_dicts),
+            #     "objective": "binary_crossentropy",
+            #     "input_dtype": np.float32,  # this is what type the model uses the input feature data
+            #     "internal_dtype": np.float64  # this is what type the model uses for values and thresholds
+            # }
+            model = [
+                SingleTree(t, scaling=1.0 / len(tree_dicts), normalize=True)
+                for t in tree_dicts
+            ]
         return model
 
-    def _get_parent_node(self, node_id):
-        return [node.id for node in self.node_list if (node.leaf_node == False) if ((node.left.id == node_id) | (node.right.id == node_id))][0]
+    def apply_smSHAP_HS(self, HS_lambda=0):
+        '''Apply Selective HS using Smooth SHAP. Overwrites values of fitted tree. Can also be applied post hoc'''
 
-    def _reestimate_node_values(self, X, y):
-        if isinstance(X, pd.DataFrame):
-            X = X.values
-        if isinstance(y, pd.Series):
-            y = y.values
+        #check if forest already used HS during training: if yes, return error
+        if (self.trees[0].HS_applied==True) | (self.smSHAP_HS_applied==True):
+            message = "For the given model (selective) hierarchical shrinkage was already applied during fit! Please use an estimator with HSShrinkage=False & HS_smSHAP=False"
+            warn(message)
+            return
 
-        traversed_nodes = self.explain_decision_path(X)[:, 0].copy()
-        y_vals_array = np.full((self.n_nodes, X.shape[0]), np.nan)
+        # Calculate Smooth SHAP scores
+        smSHAP_vals, _, smSHAP_coefs = smooth_shap(self.inbag_SHAP_values, self.oob_SHAP_values)
+        self.smSHAP_coefs = smSHAP_coefs
+        self.smSHAP_vals = smSHAP_vals
 
-        for i, (idxs, y) in enumerate(zip(traversed_nodes, y)):
-            y_vals_array[list(idxs), [i]] = y
+        #For each tree in the forest apply HS with sm SHAP lin coef
+        for tree in self.trees:
 
-        nan_rows = np.argwhere(np.isnan(y_vals_array).all(axis=1)).flatten()
+            tree.HS_lambda = HS_lambda #update attribute HS_lambda
+            tree._apply_hierarchical_srinkage(HS_lambda=HS_lambda, smSHAP_coefs=smSHAP_coefs) #apply HS with SmSHAP
+            tree._create_node_dict() # Update node dict attributes for each tree
 
-        if nan_rows.shape[0] != 0:
-            for nan_node_id in nan_rows:
-                par_node_id = self._get_parent_node(nan_node_id)
-                y_vals_array[nan_node_id] = y_vals_array[par_node_id]
+        #set attribute to store that smSHAP HS wasused
+        self.smSHAP_HS_applied=True
 
-        result = {}
+    def apply_nodewise_HS(self, tree, X_inbag, y_inbag, X_oob, y_oob, shrinkage_type="MSE_ratio", HS_lambda=0, cohen_reg_param=2, alpha=0.05, cohen_statistic="f", testHS=False):
+        '''Apply HS using smoothing coefficient based on discrepancies between inbag and oob data. Overwrites values of fitted tree.'''
 
-        if self.treetype == "regression":
-            node_vals = np.nanmean(y_vals_array, axis=1)
-            n_samples = np.count_nonzero(~np.isnan(y_vals_array), axis=1)
+        #check if forest already used HS during training: if yes, return error
+        if (tree.HS_applied==True) | (self.nodewise_HS_applied==True):
+            message = "For the given model (selective) hierarchical shrinkage was already applied during fit! Please use an estimator with HSShrinkage=False & HS_nodewise=False"
+            warn(message)
+            return
 
-            for i in range(y_vals_array.shape[0]):
-                result[i] = {"samples": n_samples[i], "value": node_vals[i]}
-            node_vals = np.nanmean(y_vals_array, axis=1)
-            return node_vals, result, nan_rows, y_vals_array
+        # Reestimate node values for inbag/oob smoothing
+        _, reest_node_vals_inbag, nan_rows_inbag, y_inbag_p_node = tree._reestimate_node_values(X_inbag, y_inbag)
+        _, reest_node_vals_oob, nan_rows_oob, y_oob_p_node = tree._reestimate_node_values(X_oob, y_oob)
 
-        elif self.treetype == "classification":
-            for i in range(y_vals_array.shape[0]):
-                n_samples = len(y_vals_array[i, :][~np.isnan(y_vals_array[i, :])])
-                val, cnts = np.unique(y_vals_array[i, :][~np.isnan(y_vals_array[i, :])], return_counts=True)
-                counts = {k: v for k, v in zip(val, cnts)}
+        # Variables to store results p node
+        conf_int_nodes = []
+        m_nodes = []
 
-                clf_value_dis = [counts.get(0) or 0, counts.get(1) or 0]
-                clf_prob_dis = (np.array(clf_value_dis) / n_samples)
-                leaf_value = np.argmax(clf_prob_dis)
+        # For each node calculate shrinkage param
+        for i in range(tree.n_nodes):
 
-                result[i] = {"samples": n_samples, "value": leaf_value, "value_distribution": clf_value_dis, "prob_distribution": clf_prob_dis}
-            node_prob = np.array([(1 - val, val) for val in np.nanmean(y_vals_array, axis=1)])
-            return node_prob, result, nan_rows, y_vals_array
+            # Pass y_vals_inbag and oob to one of the conf int function
+            if shrinkage_type=="MSE_ratio":
+                conf_int, m = conf_int_ratio_mse_ratio(y_inbag_p_node[i,:][~np.isnan(y_inbag_p_node[i,:])], #filter out nans
+                                                        y_oob_p_node[i,:][~np.isnan(y_oob_p_node[i,:])], #filter out nans
+                                                        tree.node_list[i].value,
+                                                        node_dict_inbag = reest_node_vals_inbag[i],
+                                                        node_dict_oob = reest_node_vals_oob[i],
+                                                        alpha=alpha, type=tree.treetype)
+                conf_int_nodes.append(conf_int)
+                m_nodes.append(m)
+            elif shrinkage_type=="effect_size":
+                conf_int, m = conf_int_cohens_d(y_inbag_p_node[i,:][~np.isnan(y_inbag_p_node[i,:])], #filter out nans
+                                                    y_oob_p_node[i,:][~np.isnan(y_oob_p_node[i,:])], #filter out nans
+                                                    reg_param=cohen_reg_param, alpha=alpha, cohen_statistic=cohen_statistic)
+                conf_int_nodes.append(conf_int)
+                m_nodes.append(m)
+
+        # apply HS with smoothing m parameter
+        tree._apply_hierarchical_srinkage(HS_lambda=HS_lambda, m_nodes=m_nodes, testHS=testHS) #apply HS with nodewise HS
+        tree._create_node_dict() # Update node dict attributes for each tree
+
+        # store m_nodes, conf_interval_nodes and other parameter settings as class attribute
+        tree.nodewise_HS_dict = {"conf_intervals": conf_int_nodes,
+                                "m_values": m_nodes,
+                                "shrinkage_type":shrinkage_type,
+                                "alpha":alpha,
+                                "reest_node_vals_inbag":reest_node_vals_inbag,
+                                "nan_rows_inbag":nan_rows_inbag,
+                                "reest_node_vals_oob":reest_node_vals_oob,
+                                "nan_rows_oob":nan_rows_oob}
+
+        # Add additional information for shrinkage type effect size to dict
+        if shrinkage_type=="effect_size":
+            tree.nodewise_HS_dict["cohen_reg_param"]=cohen_reg_param
+            tree.nodewise_HS_dict["cohen_statistic"]=cohen_statistic
+            
+    def prune(self, min_samples_leaf=None):
+        """
+        Prune each tree in the random forest.
+        
+        Parameters
+        ----------
+        min_samples_leaf : int, default=None
+            The minimum number of samples required to be at a leaf node after pruning.
+            If None, use the minimum samples leaf defined in the tree.
+        """
+        for tree in self.trees:
+            tree.prune(min_samples_leaf)
